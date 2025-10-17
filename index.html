@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Blackjack Multiplayer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap" rel="stylesheet">
+    <!-- Socket.IO Client Library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+    <style>
+        body {
+            font-family: 'Poppins', sans-serif;
+            background-color: #1a2a3a;
+            color: #f0f0f0;
+            overflow: hidden; /* Prevent body scroll, layout is designed for full screen */
+        }
+        .view { display: none; }
+        .view.active { display: flex; }
+
+        /* Card Styles */
+        .card {
+            width: 80px;
+            height: 112px;
+            border-radius: 8px;
+            font-size: 18px;
+            position: relative;
+            transform-style: preserve-3d;
+            transition: transform 0.6s, margin-left 0.3s ease;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+        }
+        .card-face {
+            width: 100%;
+            height: 100%;
+            position: absolute;
+            top: 0; left: 0;
+            backface-visibility: hidden;
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 8px;
+        }
+        .card-back {
+            background: linear-gradient(135deg, #1e3a8a 25%, transparent 25%) -50px 0, linear-gradient(225deg, #1e3a8a 25%, transparent 25%) -50px 0, linear-gradient(315deg, #1e3a8a 25%, transparent 25%), linear-gradient(45deg, #1e3a8a 25%, transparent 25%);
+            background-size: 100px 100px;
+            background-color: #2b4f9a;
+            border: 4px solid white;
+            z-index: 2;
+        }
+        .card-front {
+            transform: rotateY(180deg);
+            background-color: #f8fafc;
+            color: black;
+            z-index: 1;
+        }
+        .card-front.red { color: #d92d2d; }
+        .card .suit { font-size: 16px; }
+        .card.flipped { transform: rotateY(180deg); }
+        .hand-container {
+            display: flex;
+            min-height: 112px;
+            align-items: center;
+            justify-content: center;
+        }
+        .player-hand .card {
+            margin-left: -30px;
+        }
+        .player-hand .card:first-child {
+            margin-left: 0;
+        }
+        /* Game Board Styles */
+        .game-board {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 16px;
+            background: radial-gradient(circle, #2a4a6e 0%, #1a2a3a 100%);
+        }
+        .player-area {
+            background-color: rgba(0,0,0,0.2);
+            padding: 12px;
+            border-radius: 10px;
+            width: 90%;
+            max-width: 700px;
+            text-align: center;
+            margin-bottom: 12px;
+        }
+        /* Buttons and Chips */
+        .btn {
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            border: none;
+        }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-primary { background-color: #3b82f6; color: white; }
+        .btn-danger { background-color: #ef4444; color: white; }
+        .btn-secondary { background-color: #6b7280; color: white; }
+        .chip {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 12px;
+            color: white;
+            cursor: pointer;
+            border: 3px solid #fff;
+            box-shadow: 0 3px 8px rgba(0,0,0,0.4);
+            transition: all 0.2s ease;
+        }
+        .chip-100 { background-color: #2563eb; border-color: #93c5fd; }
+        .chip-500 { background-color: #9333ea; border-color: #d8b4fe; }
+        .chip-1000 { background-color: #f97316; border-color: #fdba74; }
+        
+        /* Modal Styles */
+        #modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.8);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="game-board">
+        <!-- User Info and Controls -->
+        <div class="absolute top-4 right-4 flex items-center gap-4">
+            <div class="text-right">
+                <div id="username-display" class="font-bold text-lg">Connecting...</div>
+                <div id="player-balance" class="font-semibold text-green-400 text-md">Balance: $0</div>
+            </div>
+            <button id="friends-btn" class="btn btn-secondary text-sm">Friends</button>
+        </div>
+        
+        <h1 class="text-4xl font-bold mb-4 text-white" style="text-shadow: 2px 2px 8px rgba(0,0,0,0.5);">Blackjack Table</h1>
+
+        <!-- Dealer's Area -->
+        <div id="dealer-area" class="player-area mb-4 border-b-2 border-white/50">
+            <h2 class="text-xl font-semibold mb-2">Dealer's Hand <span id="dealer-score" class="font-bold"></span></h2>
+            <div id="dealer-cards" class="hand-container player-hand"></div>
+        </div>
+
+        <!-- Other Players Area -->
+        <div id="other-players-container" class="flex flex-wrap justify-center gap-4 mb-4 overflow-y-auto max-h-36 w-full max-w-7xl">
+            <!-- Other player hands will be rendered here -->
+        </div>
+
+        <!-- Current Player's Area -->
+        <div id="current-player-area" class="player-area border-4 border-yellow-400">
+             <h2 class="text-xl font-semibold mb-2">Your Hand <span id="player-score" class="font-bold"></span></h2>
+            <div id="player-cards" class="hand-container player-hand"></div>
+        </div>
+        
+        <div id="game-result" class="mt-4 text-2xl font-bold h-10 text-center"></div>
+
+
+        <!-- Betting Area & Action Buttons -->
+        <div class="mt-4 flex flex-col items-center">
+            
+            <!-- Betting Controls -->
+            <div id="betting-area" class="my-3 text-center">
+                <h3 class="text-lg font-semibold mb-2">Current Bet: $<span id="current-bet-display">0</span></h3>
+                <div id="chip-container" class="flex justify-center items-center gap-3">
+                    <button class="chip chip-100" data-value="100">$100</button>
+                    <button class="chip chip-500" data-value="500">$500</button>
+                    <button class="chip chip-1000" data-value="1000">$1000</button>
+                </div>
+            </div>
+
+            <!-- Action Buttons -->
+            <div id="action-buttons" class="mt-4 flex gap-4">
+                <button id="hit-btn" class="btn btn-primary text-lg" disabled>Hit</button>
+                <button id="stand-btn" class="btn btn-danger text-lg" disabled>Stand</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for Messages/Results -->
+    <div id="modal-overlay">
+        <div id="modal-content" class="bg-gray-700 p-6 rounded-lg text-center shadow-2xl">
+            <h2 id="modal-title" class="text-2xl font-bold mb-4">Game Message</h2>
+            <p id="modal-message" class="mb-6 text-lg"></p>
+            <button id="modal-close-btn" class="btn btn-primary">Acknowledge</button>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // --- SERVER CONNECTION ---
+            const socket = io.connect(window.location.origin); 
+
+            // --- LOCAL STATE (Client-side mirror of server data for the current player) ---
+            let myPlayerId = null;
+            let myPlayer = {}; // Data for the current client user
+
+            // --- DOM Elements ---
+            const hitBtn = document.getElementById('hit-btn');
+            const standBtn = document.getElementById('stand-btn');
+            const playerCardsEl = document.getElementById('player-cards');
+            const dealerCardsEl = document.getElementById('dealer-cards');
+            const playerScoreEl = document.getElementById('player-score');
+            const dealerScoreEl = document.getElementById('dealer-score');
+            const gameResultEl = document.getElementById('game-result');
+            const playerBalanceEl = document.getElementById('player-balance');
+            const currentBetDisplayEl = document.getElementById('current-bet-display');
+            const chipContainer = document.getElementById('chip-container');
+            const usernameDisplayEl = document.getElementById('username-display');
+            const otherPlayersContainerEl = document.getElementById('other-players-container');
+            
+            // Modal Elements
+            const modalOverlay = document.getElementById('modal-overlay');
+            const modalTitle = document.getElementById('modal-title');
+            const modalMessage = document.getElementById('modal-message');
+            const modalCloseBtn = document.getElementById('modal-close-btn');
+            
+            // --- Helper Functions ---
+
+            function createCardElement(card) {
+                const cardEl = document.createElement('div');
+                cardEl.className = 'card';
+
+                const cardBack = document.createElement('div');
+                cardBack.className = 'card-face card-back';
+                cardEl.appendChild(cardBack);
+
+                const cardFront = document.createElement('div');
+                cardFront.className = 'card-face card-front';
+                
+                // Only render card details if it's not the placeholder for the hidden dealer card
+                if (card.value !== 'Hidden') {
+                    const isRed = ['♥', '♦'].includes(card.suit);
+                    if (isRed) cardFront.classList.add('red');
+                    
+                    cardFront.innerHTML = `
+                        <div class="self-start"><span class="suit">${card.suit}</span> ${card.value}</div>
+                        <div class="self-center text-4xl">${card.suit}</div>
+                        <div class="self-end transform rotate-180"><span class="suit">${card.suit}</span> ${card.value}</div>
+                    `;
+                    // Add flip animation class only if card is visible
+                    setTimeout(() => cardEl.classList.add('flipped'), 100);
+                } else {
+                    // Card is hidden, ensure it stays facedown
+                    cardEl.classList.remove('flipped');
+                }
+
+                cardEl.appendChild(cardFront);
+
+                return cardEl;
+            }
+
+            function toggleActionButtons(hit, stand) {
+                hitBtn.disabled = hit;
+                standBtn.disabled = stand;
+            }
+            
+            function toggleChips(disabled) {
+                const chips = chipContainer.querySelectorAll('.chip');
+                chips.forEach(chip => chip.disabled = disabled);
+            }
+
+            function updateUI(playerData, dealerHand, dealerScore, phase, allPlayers) {
+                // 1. Update Current Player's UI
+                myPlayer = playerData;
+                usernameDisplayEl.textContent = myPlayer.name || `Player ${myPlayer.id}`;
+                playerBalanceEl.textContent = `Balance: $${myPlayer.balance}`;
+                currentBetDisplayEl.textContent = myPlayer.bet;
+                playerScoreEl.textContent = myPlayer.score > 0 ? `= ${myPlayer.score}` : '';
+
+                // 2. Render Player Hand
+                playerCardsEl.innerHTML = '';
+                myPlayer.hand.forEach(card => playerCardsEl.appendChild(createCardElement(card)));
+
+                // 3. Render Dealer Hand and Score
+                dealerCardsEl.innerHTML = '';
+                dealerHand.forEach(card => dealerCardsEl.appendChild(createCardElement(card)));
+                // Dealer score only visible when in results phase or dealer's turn
+                dealerScoreEl.textContent = dealerScore > 0 ? `= ${dealerScore}` : '';
+                
+                // 4. Handle Phase-specific UI
+                gameResultEl.textContent = ''; // Clear previous message initially
+                
+                if (phase === 'player_turn' && myPlayer.status === 'playing') {
+                    // It is the action phase, and this player is still 'playing'
+                    toggleChips(true); // Betting disabled
+                    toggleActionButtons(false, false);
+                } else if (phase === 'results') {
+                    // Game result phase
+                    toggleChips(true);
+                    toggleActionButtons(true, true);
+                    gameResultEl.textContent = myPlayer.message;
+                    if (myPlayer.message && myPlayer.status !== 'playing') {
+                         showModal('Round Over', myPlayer.message);
+                    }
+                } else if (phase === 'betting') {
+                    // Betting phase
+                    toggleChips(false); // Chips enabled
+                    toggleActionButtons(true, true);
+                    gameResultEl.textContent = 'Place your bet to start the round!';
+                    hideModal(); // Ensure modal is hidden for new round
+                } else {
+                     // Default: disable everything until betting starts or turn comes
+                    toggleChips(true); 
+                    toggleActionButtons(true, true);
+                    if (myPlayer.status !== 'playing' && myPlayer.message) {
+                        gameResultEl.textContent = myPlayer.message;
+                    }
+                }
+                
+                // 5. Render Other Players
+                renderOtherPlayers(allPlayers.filter(p => p.id !== myPlayerId));
+            }
+
+            function renderOtherPlayers(others) {
+                otherPlayersContainerEl.innerHTML = '';
+                
+                others.forEach(player => {
+                    const playerDiv = document.createElement('div');
+                    playerDiv.className = 'player-area w-56 p-3 bg-gray-700/50';
+                    playerDiv.innerHTML = `
+                        <h3 class="font-semibold text-lg mb-1">${player.name}</h3>
+                        <div class="text-sm text-green-300">Balance: $${player.balance}</div>
+                        <div class="text-sm font-bold">Bet: $${player.bet}</div>
+                        <div class="text-sm font-bold text-yellow-300">${player.status.toUpperCase()}</div>
+                        <div class="hand-container player-hand mt-2 scale-75 transform origin-top-left">
+                            <!-- Cards will go here -->
+                        </div>
+                    `;
+                    const handContainer = playerDiv.querySelector('.hand-container');
+                    
+                    player.hand.forEach(card => {
+                        handContainer.appendChild(createCardElement(card));
+                    });
+
+                    otherPlayersContainerEl.appendChild(playerDiv);
+                });
+            }
+
+            function showModal(title, message) {
+                modalTitle.textContent = title;
+                modalMessage.textContent = message;
+                modalCloseBtn.textContent = 'Acknowledge';
+                modalOverlay.style.display = 'flex';
+            }
+
+            function hideModal() {
+                modalOverlay.style.display = 'none';
+            }
+            
+            // --- SOCKET.IO EVENT LISTENERS ---
+
+            socket.on('connect', () => {
+                console.log('Connected to server via Socket.IO');
+            });
+            
+            socket.on('player_init', (data) => {
+                // Sent once upon connection, gives the client their unique ID
+                myPlayerId = data.id;
+                myPlayer.id = data.id;
+                myPlayer.name = data.name;
+            });
+            
+            socket.on('game_state_update', (state) => {
+                // The main synchronization event, sent by the server after every major action
+                const myPlayerData = state.players.find(p => p.id === myPlayerId);
+                
+                if (myPlayerData) {
+                    updateUI(myPlayerData, state.dealer_hand, state.dealer_score, state.phase, state.players);
+                } else {
+                    console.error("Could not find my player data in the received state.");
+                }
+            });
+
+            // --- DOM Event Listeners ---
+            
+            // Betting: Send bet action to the server
+            chipContainer.addEventListener('click', (e) => {
+                if (e.target.classList.contains('chip') && !e.target.disabled) {
+                    const value = parseInt(e.target.dataset.value);
+                    if (myPlayer.balance >= myPlayer.bet + value) {
+                       socket.emit('place_bet', { amount: value });
+                    }
+                }
+            });
+            
+            // Game Actions: Send 'hit' or 'stand' to the server
+            hitBtn.addEventListener('click', () => {
+                if (!hitBtn.disabled) {
+                    socket.emit('player_hit');
+                }
+            });
+            
+            standBtn.addEventListener('click', () => {
+                if (!standBtn.disabled) {
+                    socket.emit('player_stand');
+                }
+            });
+
+            // Modal: Close action
+            modalCloseBtn.addEventListener('click', hideModal);
+            
+            // TODO: Add friends button and logic for future development
+            document.getElementById('friends-btn').addEventListener('click', () => {
+                showModal('Friends List', 'Feature coming soon! Multiplayer is ready, invite your friends to the table.');
+            });
+        });
+    </script>
+</body>
+</html>
